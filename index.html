@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0f1117">
-<title>Карта города — Авито</title>
+<title>Карта города — метки</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="style.css">
 </head>
@@ -48,6 +48,7 @@
       <h2>Метки <span id="marker-count" class="count">0</span></h2>
       <button id="btn-clear-markers" class="btn btn-ghost" title="Удалить все метки">Очистить</button>
     </div>
+    <!-- Контейнер для фильтров по типам -->
     <div id="marker-filters" class="marker-filters"></div>
     
     <div id="markers-list" class="markers-list">
@@ -83,76 +84,33 @@
   </form>
 </dialog>
 
-<!-- Модалка: метка (с вкладками) -->
-<dialog id="dialog-marker" class="modal modal-wide">
-  <div class="modal-content">
-    <div class="tabs">
-      <button type="button" class="tab active" data-tab="tab-main">Основное</button>
-      <button type="button" class="tab" data-tab="tab-stats">Статистика</button>
+<!-- Модалка: метка -->
+<dialog id="dialog-marker" class="modal">
+  <form method="dialog" class="modal-content" id="marker-form">
+    <h3 id="marker-title">Метка</h3>
+    
+    <!-- Выбор типа метки -->
+    <label class="field">
+      <span>Тип метки</span>
+      <select id="marker-type" class="map-select">
+        <option value="">— Без типа —</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Комментарий</span>
+      <textarea id="marker-comment" rows="4" placeholder="Описание места..."></textarea>
+    </label>
+    <div class="field">
+      <span>Цвет (если нет типа)</span>
+      <div id="marker-colors" class="color-picker"></div>
     </div>
-
-    <!-- Вкладка: Основное -->
-    <div id="tab-main" class="tab-content active">
-      <form method="dialog" id="marker-form-main">
-        <h3 id="marker-title">Метка</h3>
-        
-        <label class="field">
-          <span>Тип метки</span>
-          <select id="marker-type" class="map-select">
-            <option value="">— Без типа —</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Комментарий / Название объявления</span>
-          <textarea id="marker-comment" rows="3" placeholder="Описание..."></textarea>
-        </label>
-
-        <label class="field" id="field-days-remaining">
-          <span>Остаток дней (всего 30)</span>
-          <input type="number" id="marker-days" min="1" max="30" value="30">
-        </label>
-
-        <div class="field">
-          <span>Цвет (если нет типа)</span>
-          <div id="marker-colors" class="color-picker"></div>
-        </div>
-        
-        <div class="modal-actions" style="margin-top: 16px;">
-          <button type="button" id="marker-delete" class="btn btn-danger" hidden>Удалить</button>
-          <button type="button" id="marker-cancel" class="btn">Закрыть</button>
-          <button type="submit" class="btn btn-primary">Сохранить</button>
-        </div>
-      </form>
+    <div class="modal-actions">
+      <button type="button" id="marker-cancel" class="btn">Отмена</button>
+      <button type="button" id="marker-delete" class="btn btn-danger" hidden>Удалить</button>
+      <button type="submit" class="btn btn-primary">Сохранить</button>
     </div>
-
-    <!-- Вкладка: Статистика -->
-    <div id="tab-stats" class="tab-content">
-      <div class="chart-container">
-        <canvas id="stats-chart"></canvas>
-      </div>
-      
-      <div class="stats-inputs">
-        <h4>Добавить данные за сегодня</h4>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <label class="field" style="flex:1; min-width: 80px;">
-            <span>Просмотры</span>
-            <input type="number" id="stat-views" placeholder="0">
-          </label>
-          <label class="field" style="flex:1; min-width: 80px;">
-            <span>Контакты</span>
-            <input type="number" id="stat-contacts" placeholder="0">
-          </label>
-          <label class="field" style="flex:1; min-width: 80px;">
-            <span>Позиция</span>
-            <input type="number" id="stat-position" placeholder="0">
-          </label>
-        </div>
-        <button type="button" id="btn-save-stats" class="btn btn-primary" style="margin-top: 10px; width: 100%;">Записать за сегодня</button>
-      </div>
-    </div>
-
-  </div>
+  </form>
 </dialog>
 
 <!-- Модалка: меню -->
@@ -187,7 +145,6 @@
 <div id="toast-container" class="toast-container"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script type="module" src="app.js"></script>
 </body>
 </html>
