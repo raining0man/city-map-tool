@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0f1117">
 <title>Карта города — метки</title>
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -32,12 +34,15 @@
     <div id="map-container" class="map-container">
       <div id="empty-state" class="empty-state">
         <p class="empty-title">Карта не загружена</p>
-        <p class="hint">Нажмите «+ Карта», чтобы загрузить изображение карты города</p>
+        <p class="hint">Нажмите «+ Карта», чтобы загрузить изображение или создать интерактивную карту</p>
       </div>
+      <!-- Контейнер для изображения -->
       <div id="map-viewport" class="map-viewport" hidden>
         <img id="map-image" alt="Карта" draggable="false">
         <div id="markers-layer" class="markers-layer"></div>
       </div>
+      <!-- Контейнер для Leaflet -->
+      <div id="leaflet-map" class="leaflet-map" hidden></div>
     </div>
   </section>
 
@@ -52,7 +57,7 @@
   </aside>
 </main>
 
-<!-- Модалка: загрузка карты -->
+<!-- Модалка: создание карты -->
 <dialog id="dialog-upload" class="modal">
   <form method="dialog" class="modal-content" id="upload-form">
     <h3>Новая карта</h3>
@@ -60,14 +65,21 @@
       <span>Название</span>
       <input type="text" id="upload-name" placeholder="Например: Центр города" required>
     </label>
-    <label class="field">
+    <div class="field">
+      <span>Тип карты</span>
+      <div class="radio-group">
+        <label><input type="radio" name="map-type" value="image" checked> Изображение (JPG/PNG)</label>
+        <label><input type="radio" name="map-type" value="osm"> Интерактивная карта (OSM)</label>
+      </div>
+    </div>
+    <label class="field" id="file-field">
       <span>Изображение</span>
-      <input type="file" id="upload-file" accept="image/*" required>
+      <input type="file" id="upload-file" accept="image/*">
       <small class="hint">JPG/PNG. Будет сжато автоматически (макс. 2000 px).</small>
     </label>
     <div class="modal-actions">
       <button type="button" id="upload-cancel" class="btn">Отмена</button>
-      <button type="submit" class="btn btn-primary">Загрузить</button>
+      <button type="submit" class="btn btn-primary">Создать</button>
     </div>
   </form>
 </dialog>
@@ -107,6 +119,8 @@
 <input type="file" id="import-file" accept="application/json" hidden>
 <div id="toast-container" class="toast-container"></div>
 
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module" src="app.js"></script>
 </body>
 </html>
