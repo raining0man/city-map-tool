@@ -37,9 +37,8 @@ let markerColor = '#e74c3c';
 let leafletMap = null;
 let leafletMarkers = [];
 
-// Фильтры (Set с ID типов, которые нужно отображать. Пустая строка '' — это "без типа")
 let visibleTypes = new Set();
-let knownTypes = new Set(); // Чтобы отслеживать новые типы с других устройств
+let knownTypes = new Set();
 let currentActiveMapId = null;
 
 const LS_MAIN = 'mapTool:main';
@@ -56,6 +55,7 @@ function uid(prefix) { return `${prefix}_${Date.now().toString(36)}_${Math.rando
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(msg, type='info') {
   const c = document.getElementById('toast-container');
+  if (!c) return;
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
   el.textContent = msg;
@@ -115,12 +115,10 @@ function subscribeMap(mapId) {
   if (mapUnsub) { mapUnsub(); mapUnsub = null; }
   subscribedMapId = mapId;
   mapUnsub = onSnapshot(doc(db, 'maps', mapId), snap => {
-    if (isSaving) return; // Защита от гонки данных (как в ТЗ)
+    if (isSaving) return;
     const data = snap.data();
     if (!data) return;
-    // Проверка версии
     if (activeMap && activeMap.id === mapId && (data.version || 0) <= (activeMap.version || 0)) return;
-    
     activeMap = data; 
     cacheMap(mapId, data); 
     renderMap();
@@ -161,20 +159,27 @@ function renderMain() {
   const vb = document.getElementById('version-badge');
   if (vb) vb.textContent = 'v' + (mainData?.version || 0);
   const sel = document.getElementById('map-select');
-  const maps = mainData?.maps || [];
-  sel.innerHTML = maps.length ? maps.map(m => `<option value="${esc(m.id)}"${m.id === mainData.activeMapId ? ' selected' : ''}>${esc(m.name)}${m.type === 'osm' ? ' 🌐' : ''}</option>`).join('') : '<option value="">— нет карт —</option>';
-  document.getElementById('btn-delete-map').disabled = !mainData?.activeMapId;
+  if (sel) {
+    const maps = mainData?.maps || [];
+    sel.innerHTML = maps.length ? maps.map(m => `<option value="${esc(m.id)}"${m.id === mainData.activeMapId ? ' selected' : ''}>${esc(m.name)}${m.type === 'osm' ? ' 🌐' : ''}</option>`).join('') : '<option value="">— нет карт —</option>';
+  }
+  const btnDel = document.getElementById('btn-delete-map');
+  if (btnDel) btnDel.disabled = !mainData?.activeMapId;
 }
 
 function renderMap() {
+  const emptyEl = document.getElementById('empty-state');
+  const vpEl = document.getElementById('map-viewport');
+  const leafletEl = document.getElementById('leaflet-map');
+  if (!emptyEl || !vpEl || !leafletEl) return; // Защита от отсутствия HTML
+
   if (!activeMap) {
-    document.getElementById('empty-state').hidden = false;
-    document.getElementById('map-viewport').hidden = true;
-    document.getElementById('leaflet-map').hidden = true;
+    emptyEl.hidden = false;
+    vpEl.hidden = true;
+    leafletEl.hidden = true;
     renderMarkers(); return;
   }
 
-  // Инициализация типов и фильтров при смене карты
   if (activeMap.id !== currentActiveMapId) {
     currentActiveMapId = activeMap.id;
     knownTypes.clear();
@@ -182,8 +187,7 @@ function renderMap() {
     visibleTypes.add('');
   }
 
-  // ВАЖНО: Автоматически делаем видимыми все новые типы, пришедшие с других устройств
-  if (!activeMap.markerTypes) activeMap.markerTypes = [];
+  if (!Array.isArray(activeMap.markerTypes)) activeMap.markerTypes = [];
   activeMap.markerTypes.forEach(t => {
     if (!knownTypes.has(t.id)) {
       knownTypes.add(t.id);
@@ -191,20 +195,20 @@ function renderMap() {
     }
   });
 
-  document.getElementById('empty-state').hidden = true;
+  emptyEl.hidden = true;
   
   if (activeMap.type === 'osm') {
-    document.getElementById('map-viewport').hidden = true;
-    document.getElementById('leaflet-map').hidden = false;
+    vpEl.hidden = true;
+    leafletEl.hidden = false;
     initLeafletMap();
     renderFilters();
     renderLeafletMarkers();
     renderMarkerList();
   } else {
-    document.getElementById('leaflet-map').hidden = true;
-    document.getElementById('map-viewport').hidden = false;
+    leafletEl.hidden = true;
+    vpEl.hidden = false;
     const img = document.getElementById('map-image');
-    if (img.src !== activeMap.image) img.src = activeMap.image;
+    if (img && img.src !== activeMap.image) img.src = activeMap.image;
     renderFilters();
     renderMarkers();
   }
@@ -217,7 +221,7 @@ function renderFilters() {
   const container = document.getElementById('marker-filters');
   if (!container || !activeMap) return;
   
-  if (!activeMap.markerTypes) activeMap.markerTypes = [];
+  if (!Array.isArray(activeMap.markerTypes)) activeMap.markerTypes = [];
   
   let html = `<label class="filter-label"><input type="checkbox" data-id="" ${visibleTypes.has('') ? 'checked' : ''}> Без типа</label>`;
   activeMap.markerTypes.forEach(t => {
@@ -240,7 +244,7 @@ function renderFilters() {
 function renderTypesList() {
   const list = document.getElementById('types-list');
   if (!list || !activeMap) return;
-  if (!activeMap.markerTypes) activeMap.markerTypes = [];
+  if (!Array.isArray(activeMap.markerTypes)) activeMap.markerTypes = [];
 
   if (!activeMap.markerTypes.length) {
     list.innerHTML = '<div class="hint">Нет добавленных типов</div>';
@@ -276,8 +280,14 @@ function renderTypesList() {
    Leaflet & Render Markers
    ============================================================ */
 function initLeafletMap() {
+  if (typeof L === 'undefined') {
+    console.error('Leaflet не загружен');
+    toast('Ошибка загрузки карты (Leaflet)', 'error');
+    return;
+  }
   if (leafletMap) { leafletMap.remove(); leafletMap = null; }
   const div = document.getElementById('leaflet-map');
+  if (!div) return;
   div.innerHTML = '';
   leafletMap = L.map(div).setView([SPB_LAT, SPB_LNG], SPB_ZOOM);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(leafletMap);
@@ -382,6 +392,7 @@ function openMarkerDialog(markerId, coords = null) {
   const titleEl = document.getElementById('marker-title');
   const colorsEl = document.getElementById('marker-colors');
   const delBtn = document.getElementById('marker-delete');
+  if (!dlg || !ta || !typeSelect || !titleEl || !colorsEl || !delBtn) return;
 
   typeSelect.innerHTML = '<option value="">— Без типа —</option>' + 
     (activeMap.markerTypes || []).map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
@@ -530,61 +541,71 @@ function switchMap(id) {
    Events
    ============================================================ */
 function bindEvents() {
-  document.getElementById('map-image').addEventListener('click', (e) => {
+  // Безопасная привязка
+  const on = (id, ev, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(ev, fn); };
+
+  on('map-image', 'click', (e) => {
     if (!activeMap || activeMap.type === 'osm') return;
     const img = document.getElementById('map-image'); const r = img.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width; const y = (e.clientY - r.top) / r.height;
     if (x >= 0 && x <= 1 && y >= 0 && y <= 1) openMarkerDialog(null, { x, y });
   });
 
-  document.getElementById('btn-upload').addEventListener('click', () => {
-    document.getElementById('upload-form').reset();
-    document.getElementById('upload-file').required = true;
-    document.getElementById('file-field').style.display = 'flex';
-    document.getElementById('dialog-upload').showModal();
+  on('btn-upload', 'click', () => {
+    const form = document.getElementById('upload-form');
+    const fileInp = document.getElementById('upload-file');
+    const fileFld = document.getElementById('file-field');
+    if (form) form.reset();
+    if (fileInp) fileInp.required = true;
+    if (fileFld) fileFld.style.display = 'flex';
+    const dlg = document.getElementById('dialog-upload');
+    if (dlg) dlg.showModal();
   });
 
   document.querySelectorAll('input[name="map-type"]').forEach(radio => {
     radio.addEventListener('change', e => {
       const isImage = e.target.value === 'image';
-      document.getElementById('file-field').style.display = isImage ? 'flex' : 'none';
-      document.getElementById('upload-file').required = isImage;
+      const fileFld = document.getElementById('file-field');
+      const fileInp = document.getElementById('upload-file');
+      if (fileFld) fileFld.style.display = isImage ? 'flex' : 'none';
+      if (fileInp) fileInp.required = isImage;
     });
   });
 
-  document.getElementById('upload-cancel').addEventListener('click', () => document.getElementById('dialog-upload').close());
-  document.getElementById('upload-form').addEventListener('submit', handleUpload);
-  document.getElementById('map-select').addEventListener('change', e => switchMap(e.target.value));
-  document.getElementById('btn-delete-map').addEventListener('click', deleteActiveMap);
+  on('upload-cancel', 'click', () => document.getElementById('dialog-upload')?.close());
+  on('upload-form', 'submit', handleUpload);
+  on('map-select', 'change', e => switchMap(e.target.value));
+  on('btn-delete-map', 'click', deleteActiveMap);
 
-  document.getElementById('marker-form').addEventListener('submit', e => { e.preventDefault(); saveMarker(); });
-  document.getElementById('marker-cancel').addEventListener('click', () => {
-    document.getElementById('dialog-marker').close(); editingMarkerId = null; pendingCoords = null;
+  on('marker-form', 'submit', e => { e.preventDefault(); saveMarker(); });
+  on('marker-cancel', 'click', () => {
+    document.getElementById('dialog-marker')?.close(); editingMarkerId = null; pendingCoords = null;
   });
-  document.getElementById('marker-delete').addEventListener('click', () => {
-    const id = editingMarkerId; document.getElementById('dialog-marker').close(); editingMarkerId = null;
+  on('marker-delete', 'click', () => {
+    const id = editingMarkerId; document.getElementById('dialog-marker')?.close(); editingMarkerId = null;
     if (id) deleteMarker(id);
   });
 
-  document.getElementById('btn-clear-markers').addEventListener('click', async () => {
+  on('btn-clear-markers', 'click', async () => {
     if (!activeMap?.markers?.length) return;
     if (!confirm('Удалить все метки на этой карте?')) return;
     if (await saveMap(activeMap.id, { markers: [] })) toast('Метки очищены', 'success');
   });
 
-  document.getElementById('btn-menu').addEventListener('click', () => document.getElementById('dialog-menu').showModal());
-  document.getElementById('btn-close-menu').addEventListener('click', () => document.getElementById('dialog-menu').close());
+  on('btn-menu', 'click', () => document.getElementById('dialog-menu')?.showModal());
+  on('btn-close-menu', 'click', () => document.getElementById('dialog-menu')?.close());
   
-  document.getElementById('btn-manage-types').addEventListener('click', () => {
-    document.getElementById('dialog-menu').close();
+  on('btn-manage-types', 'click', () => {
+    document.getElementById('dialog-menu')?.close();
     renderTypesList();
-    document.getElementById('dialog-types').showModal();
+    document.getElementById('dialog-types')?.showModal();
   });
   
-  document.getElementById('btn-close-types').addEventListener('click', () => document.getElementById('dialog-types').close());
+  on('btn-close-types', 'click', () => document.getElementById('dialog-types')?.close());
 
-  document.getElementById('btn-add-type').addEventListener('click', async () => {
+  on('btn-add-type', 'click', async () => {
     const input = document.getElementById('new-type-name');
+    if (!input) return;
     const name = input.value.trim();
     if (!name) return;
     
@@ -600,18 +621,18 @@ function bindEvents() {
     }
   });
 
-  document.getElementById('btn-export').addEventListener('click', () => {
+  on('btn-export', 'click', () => {
     const payload = { main: mainData, maps: {} };
     for (const m of (mainData?.maps || [])) { const c = readCacheMap(m.id); if (c) payload.maps[m.id] = c; }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob); const a = document.createElement('a');
     a.href = url; a.download = `city-map-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click(); URL.revokeObjectURL(url); toast('Экспорт готов', 'success');
-    document.getElementById('dialog-menu').close();
+    document.getElementById('dialog-menu')?.close();
   });
 
-  document.getElementById('btn-import').addEventListener('click', () => document.getElementById('import-file').click());
-  document.getElementById('import-file').addEventListener('change', async e => {
+  on('btn-import', 'click', () => document.getElementById('import-file')?.click());
+  on('import-file', 'change', async e => {
     const f = e.target.files[0];
     if (f) {
       try {
@@ -626,7 +647,7 @@ function bindEvents() {
         toast('Импорт завершён', 'success');
       } catch (e) { isSaving = false; console.error(e); toast('Ошибка: ' + e.message, 'error'); }
     }
-    e.target.value = ''; document.getElementById('dialog-menu').close();
+    e.target.value = ''; document.getElementById('dialog-menu')?.close();
   });
 
   window.addEventListener('online', () => { if (isReady) setSyncStatus('online'); });
