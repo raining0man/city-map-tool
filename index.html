@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f1117">
+<title>Карта города — метки</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <button id="btn-menu" class="icon-btn" title="Меню">☰</button>
+    <h1 class="title">Карта</h1>
+  </div>
+  <div class="topbar-right">
+    <span id="sync-status" class="sync-status offline" title="Локально">●</span>
+    <span id="version-badge" class="version-badge">v0</span>
+  </div>
+</header>
+
+<main class="main-layout">
+  <section class="map-section">
+    <div class="map-toolbar">
+      <select id="map-select" class="map-select" title="Выбор карты">
+        <option value="">— нет карт —</option>
+      </select>
+      <button id="btn-upload" class="btn btn-primary">+ Карта</button>
+      <button id="btn-delete-map" class="btn btn-danger" title="Удалить карту" disabled>🗑</button>
+    </div>
+    <div id="map-container" class="map-container">
+      <div id="empty-state" class="empty-state">
+        <p class="empty-title">Карта не загружена</p>
+        <p class="hint">Нажмите «+ Карта», чтобы загрузить изображение карты города</p>
+      </div>
+      <div id="map-viewport" class="map-viewport" hidden>
+        <img id="map-image" alt="Карта" draggable="false">
+        <div id="markers-layer" class="markers-layer"></div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h2>Метки <span id="marker-count" class="count">0</span></h2>
+      <button id="btn-clear-markers" class="btn btn-ghost" title="Удалить все метки">Очистить</button>
+    </div>
+    <div id="markers-list" class="markers-list">
+      <div class="empty-hint">Нажмите на карту, чтобы добавить метку</div>
+    </div>
+  </aside>
+</main>
+
+<!-- Модалка: загрузка карты -->
+<dialog id="dialog-upload" class="modal">
+  <form method="dialog" class="modal-content" id="upload-form">
+    <h3>Новая карта</h3>
+    <label class="field">
+      <span>Название</span>
+      <input type="text" id="upload-name" placeholder="Например: Центр города" required>
+    </label>
+    <label class="field">
+      <span>Изображение</span>
+      <input type="file" id="upload-file" accept="image/*" required>
+      <small class="hint">JPG/PNG. Будет сжато автоматически (макс. 2000 px).</small>
+    </label>
+    <div class="modal-actions">
+      <button type="button" id="upload-cancel" class="btn">Отмена</button>
+      <button type="submit" class="btn btn-primary">Загрузить</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Модалка: метка -->
+<dialog id="dialog-marker" class="modal">
+  <form method="dialog" class="modal-content" id="marker-form">
+    <h3 id="marker-title">Метка</h3>
+    <label class="field">
+      <span>Комментарий</span>
+      <textarea id="marker-comment" rows="4" placeholder="Описание места..."></textarea>
+    </label>
+    <div class="field">
+      <span>Цвет</span>
+      <div id="marker-colors" class="color-picker"></div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" id="marker-cancel" class="btn">Отмена</button>
+      <button type="button" id="marker-delete" class="btn btn-danger" hidden>Удалить</button>
+      <button type="submit" class="btn btn-primary">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Модалка: меню -->
+<dialog id="dialog-menu" class="modal">
+  <div class="modal-content">
+    <h3>Меню</h3>
+    <button class="menu-item" id="btn-export">📥 Экспорт JSON</button>
+    <button class="menu-item" id="btn-import">📤 Импорт JSON</button>
+    <div class="modal-actions">
+      <button class="btn" id="btn-close-menu">Закрыть</button>
+    </div>
+  </div>
+</dialog>
+
+<input type="file" id="import-file" accept="application/json" hidden>
+<div id="toast-container" class="toast-container"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
