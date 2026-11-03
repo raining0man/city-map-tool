@@ -48,16 +48,13 @@
       <h2>Метки <span id="marker-count" class="count">0</span></h2>
       <button id="btn-clear-markers" class="btn btn-ghost" title="Удалить все метки">Очистить</button>
     </div>
-    <!-- Контейнер для фильтров по типам -->
     <div id="marker-filters" class="marker-filters"></div>
-    
     <div id="markers-list" class="markers-list">
       <div class="empty-hint">Нажмите на карту, чтобы добавить метку</div>
     </div>
   </aside>
 </main>
 
-<!-- Модалка: создание карты -->
 <dialog id="dialog-upload" class="modal">
   <form method="dialog" class="modal-content" id="upload-form">
     <h3>Новая карта</h3>
@@ -84,19 +81,15 @@
   </form>
 </dialog>
 
-<!-- Модалка: метка -->
 <dialog id="dialog-marker" class="modal">
   <form method="dialog" class="modal-content" id="marker-form">
     <h3 id="marker-title">Метка</h3>
-    
-    <!-- Выбор типа метки -->
     <label class="field">
       <span>Тип метки</span>
       <select id="marker-type" class="map-select">
         <option value="">— Без типа —</option>
       </select>
     </label>
-
     <label class="field">
       <span>Комментарий</span>
       <textarea id="marker-comment" rows="4" placeholder="Описание места..."></textarea>
@@ -113,7 +106,6 @@
   </form>
 </dialog>
 
-<!-- Модалка: меню -->
 <dialog id="dialog-menu" class="modal">
   <div class="modal-content">
     <h3>Меню</h3>
@@ -126,7 +118,6 @@
   </div>
 </dialog>
 
-<!-- Модалка: управление типами -->
 <dialog id="dialog-types" class="modal">
   <div class="modal-content">
     <h3>Типы меток</h3>
