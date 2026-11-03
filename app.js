@@ -4,9 +4,6 @@ import { getAuth, signInAnonymously, onAuthStateChanged }
 import { getFirestore, doc, onSnapshot, setDoc, deleteDoc }
   from "https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js";
 
-/* ============================================================
-   Firebase init
-   ============================================================ */
 const firebaseConfig = {
   apiKey: "AIzaSyCI0se4wikT8jZIB_-j1w_Z2_N8iIrWs_s",
   authDomain: "city-map-tool.firebaseapp.com",
@@ -19,9 +16,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-/* ============================================================
-   State
-   ============================================================ */
 let isSaving = false;
 let isReady = false;
 let mainData = null;
@@ -33,7 +27,6 @@ let editingMarkerId = null;
 let pendingCoords = null;
 let markerColor = '#e74c3c';
 
-// Leaflet
 let leafletMap = null;
 let leafletMarkers = [];
 
@@ -48,9 +41,6 @@ const SPB_LAT = 59.9343;
 const SPB_LNG = 30.3351;
 const SPB_ZOOM = 12;
 
-/* ============================================================
-   Utils
-   ============================================================ */
 function uid(prefix) { return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`; }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(msg, type='info') {
@@ -70,17 +60,11 @@ function setSyncStatus(s) {
   el.title = { online: 'Синхронизировано', offline: 'Локально (нет сети)', saving: 'Сохранение...', error: 'Ошибка синхронизации' }[s] || '';
 }
 
-/* ============================================================
-   Local cache
-   ============================================================ */
 function cacheMain(d) { try { localStorage.setItem(LS_MAIN, JSON.stringify(d)); } catch(e){} }
 function cacheMap(id, d) { try { localStorage.setItem(LS_MAP(id), JSON.stringify(d)); } catch(e){} }
 function readCacheMain() { try { const s = localStorage.getItem(LS_MAIN); return s ? JSON.parse(s) : null; } catch(e){ return null; } }
 function readCacheMap(id) { try { const s = localStorage.getItem(LS_MAP(id)); return s ? JSON.parse(s) : null; } catch(e){ return null; } }
 
-/* ============================================================
-   Boot & Subscriptions
-   ============================================================ */
 async function boot() {
   const cached = readCacheMain();
   if (cached) {
@@ -125,9 +109,6 @@ function subscribeMap(mapId) {
   }, err => { console.error(err); setSyncStatus('error'); });
 }
 
-/* ============================================================
-   Save
-   ============================================================ */
 async function saveMain(patch) {
   if (!isReady) { toast('Синхронизация ещё не готова', 'error'); return false; }
   const base = mainData || { version: 0, maps: [], activeMapId: null };
@@ -152,9 +133,6 @@ async function saveMap(mapId, patch) {
   finally { isSaving = false; }
 }
 
-/* ============================================================
-   Render
-   ============================================================ */
 function renderMain() {
   const vb = document.getElementById('version-badge');
   if (vb) vb.textContent = 'v' + (mainData?.version || 0);
@@ -171,57 +149,44 @@ function renderMap() {
   const emptyEl = document.getElementById('empty-state');
   const vpEl = document.getElementById('map-viewport');
   const leafletEl = document.getElementById('leaflet-map');
-  if (!emptyEl || !vpEl || !leafletEl) return; // Защита от отсутствия HTML
+  if (!emptyEl || !vpEl || !leafletEl) return;
 
   if (!activeMap) {
-    emptyEl.hidden = false;
-    vpEl.hidden = true;
-    leafletEl.hidden = true;
+    emptyEl.hidden = false; vpEl.hidden = true; leafletEl.hidden = true;
     renderMarkers(); return;
   }
 
   if (activeMap.id !== currentActiveMapId) {
     currentActiveMapId = activeMap.id;
-    knownTypes.clear();
     visibleTypes.clear();
     visibleTypes.add('');
+    knownTypes.clear();
+    if (!activeMap.markerTypes) activeMap.markerTypes = [];
+    activeMap.markerTypes.forEach(t => { visibleTypes.add(t.id); knownTypes.add(t.id); });
+  } else {
+    if (!activeMap.markerTypes) activeMap.markerTypes = [];
+    activeMap.markerTypes.forEach(t => {
+      if (!knownTypes.has(t.id)) { knownTypes.add(t.id); visibleTypes.add(t.id); }
+    });
   }
-
-  if (!Array.isArray(activeMap.markerTypes)) activeMap.markerTypes = [];
-  activeMap.markerTypes.forEach(t => {
-    if (!knownTypes.has(t.id)) {
-      knownTypes.add(t.id);
-      visibleTypes.add(t.id);
-    }
-  });
 
   emptyEl.hidden = true;
   
   if (activeMap.type === 'osm') {
-    vpEl.hidden = true;
-    leafletEl.hidden = false;
-    initLeafletMap();
-    renderFilters();
-    renderLeafletMarkers();
-    renderMarkerList();
+    vpEl.hidden = true; leafletEl.hidden = false;
+    initLeafletMap(); renderFilters(); renderLeafletMarkers(); renderMarkerList();
   } else {
-    leafletEl.hidden = true;
-    vpEl.hidden = false;
+    leafletEl.hidden = true; vpEl.hidden = false;
     const img = document.getElementById('map-image');
     if (img && img.src !== activeMap.image) img.src = activeMap.image;
-    renderFilters();
-    renderMarkers();
+    renderFilters(); renderMarkers();
   }
 }
 
-/* ============================================================
-   Filters & Types
-   ============================================================ */
 function renderFilters() {
   const container = document.getElementById('marker-filters');
   if (!container || !activeMap) return;
-  
-  if (!Array.isArray(activeMap.markerTypes)) activeMap.markerTypes = [];
+  if (!activeMap.markerTypes) activeMap.markerTypes = [];
   
   let html = `<label class="filter-label"><input type="checkbox" data-id="" ${visibleTypes.has('') ? 'checked' : ''}> Без типа</label>`;
   activeMap.markerTypes.forEach(t => {
@@ -233,9 +198,7 @@ function renderFilters() {
     cb.addEventListener('change', e => {
       if (e.target.checked) visibleTypes.add(e.target.dataset.id);
       else visibleTypes.delete(e.target.dataset.id);
-      
-      if (activeMap.type === 'osm') renderLeafletMarkers();
-      else renderMarkers();
+      if (activeMap.type === 'osm') renderLeafletMarkers(); else renderMarkers();
       renderMarkerList();
     });
   });
@@ -244,7 +207,7 @@ function renderFilters() {
 function renderTypesList() {
   const list = document.getElementById('types-list');
   if (!list || !activeMap) return;
-  if (!Array.isArray(activeMap.markerTypes)) activeMap.markerTypes = [];
+  if (!activeMap.markerTypes) activeMap.markerTypes = [];
 
   if (!activeMap.markerTypes.length) {
     list.innerHTML = '<div class="hint">Нет добавленных типов</div>';
@@ -262,29 +225,17 @@ function renderTypesList() {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.id;
       if (!confirm('Удалить тип? У меток этого типа сбросится тип.')) return;
-      
       const newTypes = activeMap.markerTypes.filter(t => t.id !== id);
       const newMarkers = (activeMap.markers || []).map(m => m.typeId === id ? { ...m, typeId: '' } : m);
-      
       if (await saveMap(activeMap.id, { markerTypes: newTypes, markers: newMarkers })) {
-        visibleTypes.delete(id);
-        renderTypesList();
-        renderMap();
-        toast('Тип удален', 'success');
+        visibleTypes.delete(id); renderTypesList(); renderMap(); toast('Тип удален', 'success');
       }
     });
   });
 }
 
-/* ============================================================
-   Leaflet & Render Markers
-   ============================================================ */
 function initLeafletMap() {
-  if (typeof L === 'undefined') {
-    console.error('Leaflet не загружен');
-    toast('Ошибка загрузки карты (Leaflet)', 'error');
-    return;
-  }
+  if (typeof L === 'undefined') return;
   if (leafletMap) { leafletMap.remove(); leafletMap = null; }
   const div = document.getElementById('leaflet-map');
   if (!div) return;
@@ -298,9 +249,7 @@ function renderLeafletMarkers() {
   if (!leafletMap || !activeMap) return;
   leafletMarkers.forEach(m => m.remove());
   leafletMarkers = [];
-  
   const markers = (activeMap.markers || []).filter(m => visibleTypes.has(m.typeId || ''));
-
   markers.forEach((m, i) => {
     const icon = L.divIcon({
       className: 'leaflet-marker-custom',
@@ -339,22 +288,16 @@ function renderMarkers() {
 function renderMarkerList() {
   const list = document.getElementById('markers-list');
   const countEl = document.getElementById('marker-count');
-  
   const allMarkers = activeMap?.markers || [];
   const markers = allMarkers.filter(m => visibleTypes.has(m.typeId || ''));
 
   if (countEl) countEl.textContent = markers.length;
   if (!list) return;
-  
-  if (!markers.length) {
-    list.innerHTML = '<div class="empty-hint">Нет меток для отображения</div>';
-    return;
-  }
+  if (!markers.length) { list.innerHTML = '<div class="empty-hint">Нет меток для отображения</div>'; return; }
 
   list.innerHTML = markers.map((m, i) => {
     const typeObj = activeMap.markerTypes?.find(t => t.id === m.typeId);
     const typeHtml = typeObj ? `<div class="marker-type-badge">${esc(typeObj.name)}</div>` : '';
-    
     return `
     <div class="marker-item" data-id="${esc(m.id)}">
       <div class="marker-badge" style="background:${esc(m.color || '#e74c3c')}">${i + 1}</div>
@@ -380,9 +323,6 @@ function renderMarkerList() {
   });
 }
 
-/* ============================================================
-   Marker Dialog & Save
-   ============================================================ */
 function openMarkerDialog(markerId, coords = null) {
   editingMarkerId = markerId;
   pendingCoords = coords;
@@ -396,23 +336,17 @@ function openMarkerDialog(markerId, coords = null) {
 
   typeSelect.innerHTML = '<option value="">— Без типа —</option>' + 
     (activeMap.markerTypes || []).map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
-
   colorsEl.innerHTML = COLORS.map(c => `<button type="button" class="color-dot" data-color="${c}" style="background:${c}"></button>`).join('');
 
   if (markerId) {
     const m = (activeMap?.markers || []).find(x => x.id === markerId);
     if (!m) return;
-    ta.value = m.comment || '';
-    typeSelect.value = m.typeId || '';
+    ta.value = m.comment || ''; typeSelect.value = m.typeId || '';
     markerColor = m.color || '#e74c3c';
-    titleEl.textContent = 'Редактировать метку';
-    delBtn.hidden = false;
+    titleEl.textContent = 'Редактировать метку'; delBtn.hidden = false;
   } else {
-    ta.value = '';
-    typeSelect.value = '';
-    markerColor = COLORS[0];
-    titleEl.textContent = 'Новая метка';
-    delBtn.hidden = true;
+    ta.value = ''; typeSelect.value = ''; markerColor = COLORS[0];
+    titleEl.textContent = 'Новая метка'; delBtn.hidden = true;
   }
 
   colorsEl.querySelectorAll('.color-dot').forEach(btn => {
@@ -454,9 +388,6 @@ async function deleteMarker(id) {
   if (await saveMap(activeMap.id, { markers })) toast('Метка удалена', 'success');
 }
 
-/* ============================================================
-   Map Creation & Events
-   ============================================================ */
 async function handleUpload(e) {
   e.preventDefault();
   const name = document.getElementById('upload-name').value.trim();
@@ -537,11 +468,7 @@ function switchMap(id) {
   subscribeMap(id);
 }
 
-/* ============================================================
-   Events
-   ============================================================ */
 function bindEvents() {
-  // Безопасная привязка
   const on = (id, ev, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(ev, fn); };
 
   on('map-image', 'click', (e) => {
@@ -555,11 +482,9 @@ function bindEvents() {
     const form = document.getElementById('upload-form');
     const fileInp = document.getElementById('upload-file');
     const fileFld = document.getElementById('file-field');
-    if (form) form.reset();
-    if (fileInp) fileInp.required = true;
+    if (form) form.reset(); if (fileInp) fileInp.required = true;
     if (fileFld) fileFld.style.display = 'flex';
-    const dlg = document.getElementById('dialog-upload');
-    if (dlg) dlg.showModal();
+    const dlg = document.getElementById('dialog-upload'); if (dlg) dlg.showModal();
   });
 
   document.querySelectorAll('input[name="map-type"]').forEach(radio => {
@@ -594,30 +519,22 @@ function bindEvents() {
 
   on('btn-menu', 'click', () => document.getElementById('dialog-menu')?.showModal());
   on('btn-close-menu', 'click', () => document.getElementById('dialog-menu')?.close());
-  
   on('btn-manage-types', 'click', () => {
-    document.getElementById('dialog-menu')?.close();
-    renderTypesList();
-    document.getElementById('dialog-types')?.showModal();
+    document.getElementById('dialog-menu')?.close(); renderTypesList(); document.getElementById('dialog-types')?.showModal();
   });
-  
   on('btn-close-types', 'click', () => document.getElementById('dialog-types')?.close());
 
   on('btn-add-type', 'click', async () => {
     const input = document.getElementById('new-type-name');
     if (!input) return;
-    const name = input.value.trim();
-    if (!name) return;
+    const name = input.value.trim(); if (!name) return;
     
     const newType = { id: uid('t'), name };
     const newTypes = [...(activeMap.markerTypes || []), newType];
     
     if (await saveMap(activeMap.id, { markerTypes: newTypes })) {
-      input.value = '';
-      visibleTypes.add(newType.id); 
-      renderTypesList();
-      renderMap();
-      toast('Тип добавлен', 'success');
+      input.value = ''; visibleTypes.add(newType.id); knownTypes.add(newType.id);
+      renderTypesList(); renderMap(); toast('Тип добавлен', 'success');
     }
   });
 
