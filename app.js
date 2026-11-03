@@ -1,7 +1,12 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js";
-import { getFirestore, doc, onSnapshot, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js";
+import { getAuth, signInAnonymously, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js";
+import { getFirestore, doc, onSnapshot, setDoc, deleteDoc }
+  from "https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js";
 
+/* ============================================================
+   Firebase init
+   ============================================================ */
 const firebaseConfig = {
   apiKey: "AIzaSyCI0se4wikT8jZIB_-j1w_Z2_N8iIrWs_s",
   authDomain: "city-map-tool.firebaseapp.com",
@@ -14,42 +19,68 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-let isSaving = false, isReady = false;
-let mainData = null, activeMap = null;
-let subscribedMapId = null, mainUnsub = null, mapUnsub = null;
-let editingMarkerId = null, pendingCoords = null;
+/* ============================================================
+   State
+   ============================================================ */
+let isSaving = false;
+let isReady = false;
+let mainData = null;
+let activeMap = null;
+let subscribedMapId = null;
+let mainUnsub = null;
+let mapUnsub = null;
+let editingMarkerId = null;
+let pendingCoords = null;
 let markerColor = '#e74c3c';
 
-let leafletMap = null, leafletMarkers = [];
+// Leaflet
+let leafletMap = null;
+let leafletMarkers = [];
+
+// Фильтры (Set с ID типов, которые нужно отображать. Пустая строка '' — это "без типа")
 let visibleTypes = new Set();
+let knownTypes = new Set(); // Чтобы отслеживать новые типы с других устройств
 let currentActiveMapId = null;
-let currentChart = null; // Для хранения экземпляра Chart.js
 
 const LS_MAIN = 'mapTool:main';
 const LS_MAP  = id => `mapTool:map:${id}`;
 const COLORS = ['#e74c3c','#3498db','#2ecc71','#f1c40f','#9b59b6','#e67e22','#1abc9c','#34495e'];
-const SPB_LAT = 59.9343, SPB_LNG = 30.3351, SPB_ZOOM = 12;
+const SPB_LAT = 59.9343;
+const SPB_LNG = 30.3351;
+const SPB_ZOOM = 12;
 
+/* ============================================================
+   Utils
+   ============================================================ */
 function uid(prefix) { return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`; }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(msg, type='info') {
   const c = document.getElementById('toast-container');
   const el = document.createElement('div');
-  el.className = `toast toast-${type}`; el.textContent = msg;
-  c.appendChild(el); requestAnimationFrame(() => el.classList.add('show'));
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  c.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 2600);
 }
 function setSyncStatus(s) {
-  const el = document.getElementById('sync-status'); if (!el) return;
+  const el = document.getElementById('sync-status');
+  if (!el) return;
   el.className = 'sync-status ' + s;
-  el.title = { online: 'Синхронизировано', offline: 'Локально', saving: 'Сохранение...', error: 'Ошибка' }[s] || '';
+  el.title = { online: 'Синхронизировано', offline: 'Локально (нет сети)', saving: 'Сохранение...', error: 'Ошибка синхронизации' }[s] || '';
 }
 
+/* ============================================================
+   Local cache
+   ============================================================ */
 function cacheMain(d) { try { localStorage.setItem(LS_MAIN, JSON.stringify(d)); } catch(e){} }
 function cacheMap(id, d) { try { localStorage.setItem(LS_MAP(id), JSON.stringify(d)); } catch(e){} }
 function readCacheMain() { try { const s = localStorage.getItem(LS_MAIN); return s ? JSON.parse(s) : null; } catch(e){ return null; } }
 function readCacheMap(id) { try { const s = localStorage.getItem(LS_MAP(id)); return s ? JSON.parse(s) : null; } catch(e){ return null; } }
 
+/* ============================================================
+   Boot & Subscriptions
+   ============================================================ */
 async function boot() {
   const cached = readCacheMain();
   if (cached) {
@@ -60,7 +91,7 @@ async function boot() {
     }
   }
   setSyncStatus('offline');
-  try { await signInAnonymously(auth); } catch (e) { console.error(e); }
+  try { await signInAnonymously(auth); } catch (e) { console.error('Auth failed:', e); }
   onAuthStateChanged(auth, user => { if (user) subscribeMain(); });
   setTimeout(() => { if (!isReady) { isReady = true; setSyncStatus('offline'); } }, 15000);
 }
@@ -84,48 +115,55 @@ function subscribeMap(mapId) {
   if (mapUnsub) { mapUnsub(); mapUnsub = null; }
   subscribedMapId = mapId;
   mapUnsub = onSnapshot(doc(db, 'maps', mapId), snap => {
-    if (isSaving) return;
+    if (isSaving) return; // Защита от гонки данных (как в ТЗ)
     const data = snap.data();
     if (!data) return;
+    // Проверка версии
     if (activeMap && activeMap.id === mapId && (data.version || 0) <= (activeMap.version || 0)) return;
-    activeMap = data; cacheMap(mapId, data); renderMap();
-    // Если открыта модалка этого маркера, обновляем график
-    if (editingMarkerId && document.getElementById('dialog-marker').open) {
-        renderChart((activeMap.markers || []).find(m => m.id === editingMarkerId));
-    }
+    
+    activeMap = data; 
+    cacheMap(mapId, data); 
+    renderMap();
   }, err => { console.error(err); setSyncStatus('error'); });
 }
 
+/* ============================================================
+   Save
+   ============================================================ */
 async function saveMain(patch) {
-  if (!isReady) { toast('Не готово', 'error'); return false; }
+  if (!isReady) { toast('Синхронизация ещё не готова', 'error'); return false; }
   const base = mainData || { version: 0, maps: [], activeMapId: null };
   const next = { ...base, ...patch, version: (base.version || 0) + 1, updatedAt: Date.now() };
   isSaving = true; setSyncStatus('saving');
-  try { await setDoc(doc(db, 'data', 'main'), next); mainData = next; cacheMain(next); setSyncStatus('online'); return true; }
-  catch (e) { setSyncStatus('error'); return false; } finally { isSaving = false; }
+  try {
+    await setDoc(doc(db, 'data', 'main'), next);
+    mainData = next; cacheMain(next); setSyncStatus('online'); return true;
+  } catch (e) { console.error(e); setSyncStatus('error'); toast('Ошибка сохранения', 'error'); return false; } 
+  finally { isSaving = false; }
 }
 
 async function saveMap(mapId, patch) {
-  if (!isReady) { toast('Не готово', 'error'); return false; }
+  if (!isReady) { toast('Синхронизация ещё не готова', 'error'); return false; }
   const base = (activeMap && activeMap.id === mapId) ? activeMap : (readCacheMap(mapId) || { id: mapId, version: 0, markers: [], markerTypes: [] });
   const next = { ...base, ...patch, id: mapId, version: (base.version || 0) + 1, updatedAt: Date.now() };
   isSaving = true; setSyncStatus('saving');
-  try { await setDoc(doc(db, 'maps', mapId), next); activeMap = next; cacheMap(mapId, next); setSyncStatus('online'); return true; }
-  catch (e) { setSyncStatus('error'); return false; } finally { isSaving = false; }
+  try {
+    await setDoc(doc(db, 'maps', mapId), next);
+    activeMap = next; cacheMap(mapId, next); setSyncStatus('online'); return true;
+  } catch (e) { console.error(e); setSyncStatus('error'); toast('Ошибка сохранения карты', 'error'); return false; } 
+  finally { isSaving = false; }
 }
 
+/* ============================================================
+   Render
+   ============================================================ */
 function renderMain() {
-  const vb = document.getElementById('version-badge'); if (vb) vb.textContent = 'v' + (mainData?.version || 0);
-  const sel = document.getElementById('map-select'); const maps = mainData?.maps || [];
-  sel.innerHTML = maps.length ? maps.map(m => `<option value="${esc(m.id)}"${m.id === mainData.activeMapId ? ' selected' : ''}>${esc(m.name)}</option>`).join('') : '<option value="">— нет карт —</option>';
+  const vb = document.getElementById('version-badge');
+  if (vb) vb.textContent = 'v' + (mainData?.version || 0);
+  const sel = document.getElementById('map-select');
+  const maps = mainData?.maps || [];
+  sel.innerHTML = maps.length ? maps.map(m => `<option value="${esc(m.id)}"${m.id === mainData.activeMapId ? ' selected' : ''}>${esc(m.name)}${m.type === 'osm' ? ' 🌐' : ''}</option>`).join('') : '<option value="">— нет карт —</option>';
   document.getElementById('btn-delete-map').disabled = !mainData?.activeMapId;
-}
-
-// Вычисление остатка дней
-function getDaysRemaining(marker) {
-  if (!marker.expiryDate) return 30; // Для старых меток
-  const msLeft = marker.expiryDate - Date.now();
-  return Math.max(0, Math.ceil(msLeft / (1000 * 60 * 60 * 24)));
 }
 
 function renderMap() {
@@ -135,57 +173,133 @@ function renderMap() {
     document.getElementById('leaflet-map').hidden = true;
     renderMarkers(); return;
   }
+
+  // Инициализация типов и фильтров при смене карты
   if (activeMap.id !== currentActiveMapId) {
     currentActiveMapId = activeMap.id;
-    if (!activeMap.markerTypes) activeMap.markerTypes = [];
-    visibleTypes.clear(); visibleTypes.add('');
-    activeMap.markerTypes.forEach(t => visibleTypes.add(t.id));
+    knownTypes.clear();
+    visibleTypes.clear();
+    visibleTypes.add('');
   }
+
+  // ВАЖНО: Автоматически делаем видимыми все новые типы, пришедшие с других устройств
+  if (!activeMap.markerTypes) activeMap.markerTypes = [];
+  activeMap.markerTypes.forEach(t => {
+    if (!knownTypes.has(t.id)) {
+      knownTypes.add(t.id);
+      visibleTypes.add(t.id);
+    }
+  });
+
   document.getElementById('empty-state').hidden = true;
   
   if (activeMap.type === 'osm') {
     document.getElementById('map-viewport').hidden = true;
     document.getElementById('leaflet-map').hidden = false;
-    initLeafletMap(); renderFilters(); renderLeafletMarkers(); renderMarkerList();
+    initLeafletMap();
+    renderFilters();
+    renderLeafletMarkers();
+    renderMarkerList();
   } else {
     document.getElementById('leaflet-map').hidden = true;
     document.getElementById('map-viewport').hidden = false;
     const img = document.getElementById('map-image');
     if (img.src !== activeMap.image) img.src = activeMap.image;
-    renderFilters(); renderMarkers();
+    renderFilters();
+    renderMarkers();
   }
 }
 
+/* ============================================================
+   Filters & Types
+   ============================================================ */
 function renderFilters() {
-  const container = document.getElementById('marker-filters'); if (!container || !activeMap) return;
+  const container = document.getElementById('marker-filters');
+  if (!container || !activeMap) return;
+  
+  if (!activeMap.markerTypes) activeMap.markerTypes = [];
+  
   let html = `<label class="filter-label"><input type="checkbox" data-id="" ${visibleTypes.has('') ? 'checked' : ''}> Без типа</label>`;
-  activeMap.markerTypes.forEach(t => { html += `<label class="filter-label"><input type="checkbox" data-id="${esc(t.id)}" ${visibleTypes.has(t.id) ? 'checked' : ''}> ${esc(t.name)}</label>`; });
+  activeMap.markerTypes.forEach(t => {
+    html += `<label class="filter-label"><input type="checkbox" data-id="${esc(t.id)}" ${visibleTypes.has(t.id) ? 'checked' : ''}> ${esc(t.name)}</label>`;
+  });
   container.innerHTML = html;
+
   container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
     cb.addEventListener('change', e => {
-      if (e.target.checked) visibleTypes.add(e.target.dataset.id); else visibleTypes.delete(e.target.dataset.id);
-      if (activeMap.type === 'osm') renderLeafletMarkers(); else renderMarkers();
+      if (e.target.checked) visibleTypes.add(e.target.dataset.id);
+      else visibleTypes.delete(e.target.dataset.id);
+      
+      if (activeMap.type === 'osm') renderLeafletMarkers();
+      else renderMarkers();
       renderMarkerList();
     });
   });
 }
 
+function renderTypesList() {
+  const list = document.getElementById('types-list');
+  if (!list || !activeMap) return;
+  if (!activeMap.markerTypes) activeMap.markerTypes = [];
+
+  if (!activeMap.markerTypes.length) {
+    list.innerHTML = '<div class="hint">Нет добавленных типов</div>';
+    return;
+  }
+
+  list.innerHTML = activeMap.markerTypes.map(t => `
+    <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-3); padding:8px 12px; border-radius:8px;">
+      <span>${esc(t.name)}</span>
+      <button class="icon-btn danger" data-id="${esc(t.id)}" title="Удалить">✕</button>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('button[data-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      if (!confirm('Удалить тип? У меток этого типа сбросится тип.')) return;
+      
+      const newTypes = activeMap.markerTypes.filter(t => t.id !== id);
+      const newMarkers = (activeMap.markers || []).map(m => m.typeId === id ? { ...m, typeId: '' } : m);
+      
+      if (await saveMap(activeMap.id, { markerTypes: newTypes, markers: newMarkers })) {
+        visibleTypes.delete(id);
+        renderTypesList();
+        renderMap();
+        toast('Тип удален', 'success');
+      }
+    });
+  });
+}
+
+/* ============================================================
+   Leaflet & Render Markers
+   ============================================================ */
 function initLeafletMap() {
   if (leafletMap) { leafletMap.remove(); leafletMap = null; }
-  const div = document.getElementById('leaflet-map'); div.innerHTML = '';
+  const div = document.getElementById('leaflet-map');
+  div.innerHTML = '';
   leafletMap = L.map(div).setView([SPB_LAT, SPB_LNG], SPB_ZOOM);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OSM' }).addTo(leafletMap);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(leafletMap);
   leafletMap.on('click', e => { if (activeMap) openMarkerDialog(null, { lat: e.latlng.lat, lng: e.latlng.lng }); });
 }
 
 function renderLeafletMarkers() {
   if (!leafletMap || !activeMap) return;
-  leafletMarkers.forEach(m => m.remove()); leafletMarkers = [];
+  leafletMarkers.forEach(m => m.remove());
+  leafletMarkers = [];
+  
   const markers = (activeMap.markers || []).filter(m => visibleTypes.has(m.typeId || ''));
+
   markers.forEach((m, i) => {
-    const icon = L.divIcon({ className: 'leaflet-marker-custom', html: `<div style="background:${m.color || '#e74c3c'};width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;border:2px solid #fff;">${i+1}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
+    const icon = L.divIcon({
+      className: 'leaflet-marker-custom',
+      html: `<div style="background:${m.color || '#e74c3c'};width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.5)">${i+1}</div>`,
+      iconSize: [26, 26], iconAnchor: [13, 13]
+    });
     const lm = L.marker([m.lat, m.lng], { icon }).addTo(leafletMap);
-    lm.on('click', () => openMarkerDialog(m.id)); leafletMarkers.push(lm);
+    lm.on('click', () => openMarkerDialog(m.id));
+    leafletMarkers.push(lm);
   });
 }
 
@@ -196,9 +310,14 @@ function renderMarkers() {
     if (activeMap && activeMap.type !== 'osm') {
       const markers = (activeMap.markers || []).filter(m => visibleTypes.has(m.typeId || ''));
       markers.forEach((m, i) => {
-        const el = document.createElement('div'); el.className = 'marker'; el.dataset.id = m.id;
-        el.style.left = (m.x * 100) + '%'; el.style.top = (m.y * 100) + '%'; el.style.background = m.color || '#e74c3c';
-        el.innerHTML = `<span class="marker-num">${i + 1}</span>`; el.title = m.comment || '';
+        const el = document.createElement('div');
+        el.className = 'marker';
+        el.dataset.id = m.id;
+        el.style.left = (m.x * 100) + '%';
+        el.style.top = (m.y * 100) + '%';
+        el.style.background = m.color || '#e74c3c';
+        el.innerHTML = `<span class="marker-num">${i + 1}</span>`;
+        el.title = m.comment || '';
         el.addEventListener('click', e => { e.stopPropagation(); openMarkerDialog(m.id); });
         layer.appendChild(el);
       });
@@ -208,30 +327,33 @@ function renderMarkers() {
 }
 
 function renderMarkerList() {
-  const list = document.getElementById('markers-list'); const countEl = document.getElementById('marker-count');
-  const markers = (activeMap?.markers || []).filter(m => visibleTypes.has(m.typeId || ''));
+  const list = document.getElementById('markers-list');
+  const countEl = document.getElementById('marker-count');
+  
+  const allMarkers = activeMap?.markers || [];
+  const markers = allMarkers.filter(m => visibleTypes.has(m.typeId || ''));
+
   if (countEl) countEl.textContent = markers.length;
   if (!list) return;
-  if (!markers.length) { list.innerHTML = '<div class="empty-hint">Нет меток для отображения</div>'; return; }
+  
+  if (!markers.length) {
+    list.innerHTML = '<div class="empty-hint">Нет меток для отображения</div>';
+    return;
+  }
 
   list.innerHTML = markers.map((m, i) => {
     const typeObj = activeMap.markerTypes?.find(t => t.id === m.typeId);
     const typeHtml = typeObj ? `<div class="marker-type-badge">${esc(typeObj.name)}</div>` : '';
-    const daysLeft = getDaysRemaining(m);
-    const stats = m.stats || [];
-    const lastStat = stats.length > 0 ? stats[stats.length - 1] : null;
-    const statsHtml = lastStat ? `<div class="marker-stats-preview"><span>👁 ${lastStat.views}</span><span>📞 ${lastStat.contacts}</span><span>📉 ${lastStat.position}</span></div>` : '';
     
     return `
     <div class="marker-item" data-id="${esc(m.id)}">
       <div class="marker-badge" style="background:${esc(m.color || '#e74c3c')}">${i + 1}</div>
       <div class="marker-body">
         ${typeHtml}
-        <div class="marker-comment">${m.comment ? esc(m.comment) : '<span class="muted">Без названия</span>'}</div>
-        <div class="marker-stats-preview" style="color:var(--accent)">⏳ Осталось дней: ${daysLeft}</div>
-        ${statsHtml}
+        <div class="marker-comment">${m.comment ? esc(m.comment) : '<span class="muted">Без комментария</span>'}</div>
       </div>
       <div class="marker-actions">
+        <button class="icon-btn" data-act="edit" title="Изменить">✎</button>
         <button class="icon-btn danger" data-act="del" title="Удалить">✕</button>
       </div>
     </div>`;
@@ -239,64 +361,47 @@ function renderMarkerList() {
 
   list.querySelectorAll('.marker-item').forEach(item => {
     const id = item.dataset.id;
+    item.querySelector('[data-act="edit"]').addEventListener('click', e => { e.stopPropagation(); openMarkerDialog(id); });
     item.querySelector('[data-act="del"]').addEventListener('click', e => { e.stopPropagation(); deleteMarker(id); });
     item.addEventListener('click', () => {
       const marker = activeMap?.markers.find(m => m.id === id);
       if (marker && activeMap.type === 'osm' && leafletMap) leafletMap.setView([marker.lat, marker.lng], 15);
-      openMarkerDialog(id);
     });
   });
 }
 
-// Логика вкладок в модалке
-function switchTab(tabId) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
-  document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === tabId));
-}
-
+/* ============================================================
+   Marker Dialog & Save
+   ============================================================ */
 function openMarkerDialog(markerId, coords = null) {
-  editingMarkerId = markerId; pendingCoords = coords;
+  editingMarkerId = markerId;
+  pendingCoords = coords;
   const dlg = document.getElementById('dialog-marker');
   const ta = document.getElementById('marker-comment');
   const typeSelect = document.getElementById('marker-type');
   const titleEl = document.getElementById('marker-title');
   const colorsEl = document.getElementById('marker-colors');
   const delBtn = document.getElementById('marker-delete');
-  const daysField = document.getElementById('field-days-remaining');
-  const daysInput = document.getElementById('marker-days');
 
-  switchTab('tab-main'); // Всегда открываем на первой вкладке
+  typeSelect.innerHTML = '<option value="">— Без типа —</option>' + 
+    (activeMap.markerTypes || []).map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
 
-  typeSelect.innerHTML = '<option value="">— Без типа —</option>' + (activeMap.markerTypes || []).map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
   colorsEl.innerHTML = COLORS.map(c => `<button type="button" class="color-dot" data-color="${c}" style="background:${c}"></button>`).join('');
 
   if (markerId) {
     const m = (activeMap?.markers || []).find(x => x.id === markerId);
     if (!m) return;
-    ta.value = m.comment || ''; typeSelect.value = m.typeId || ''; markerColor = m.color || '#e74c3c';
-    titleEl.textContent = 'Редактировать метку'; delBtn.hidden = false;
-    daysField.style.display = 'none'; // При редактировании не меняем остаток дней вручную
-    
-    // Заполняем инпуты статистики последними данными (для удобства)
-    const stats = m.stats || [];
-    const todayStr = new Date().toISOString().split('T')[0];
-    const todayStat = stats.find(s => s.date === todayStr);
-    const lastStat = stats.length > 0 ? stats[stats.length - 1] : null;
-    
-    document.getElementById('stat-views').value = todayStat ? todayStat.views : '';
-    document.getElementById('stat-contacts').value = todayStat ? todayStat.contacts : '';
-    document.getElementById('stat-position').value = todayStat ? todayStat.position : '';
-    
-    renderChart(m);
+    ta.value = m.comment || '';
+    typeSelect.value = m.typeId || '';
+    markerColor = m.color || '#e74c3c';
+    titleEl.textContent = 'Редактировать метку';
+    delBtn.hidden = false;
   } else {
-    ta.value = ''; typeSelect.value = ''; markerColor = COLORS[0];
-    titleEl.textContent = 'Новая метка'; delBtn.hidden = true;
-    daysField.style.display = 'flex'; daysInput.value = 30;
-    
-    document.getElementById('stat-views').value = '';
-    document.getElementById('stat-contacts').value = '';
-    document.getElementById('stat-position').value = '';
-    if (currentChart) { currentChart.destroy(); currentChart = null; }
+    ta.value = '';
+    typeSelect.value = '';
+    markerColor = COLORS[0];
+    titleEl.textContent = 'Новая метка';
+    delBtn.hidden = true;
   }
 
   colorsEl.querySelectorAll('.color-dot').forEach(btn => {
@@ -308,49 +413,7 @@ function openMarkerDialog(markerId, coords = null) {
   });
 
   dlg.showModal();
-}
-
-// Отрисовка графика
-function renderChart(marker) {
-  const ctx = document.getElementById('stats-chart').getContext('2d');
-  if (currentChart) currentChart.destroy();
-
-  const stats = marker.stats || [];
-  // Сортируем по дате (хотя мы и так добавляем в конец)
-  const sortedStats = [...stats].sort((a, b) => new Date(a.date) - new Date(b.date));
-  
-  const labels = sortedStats.map(s => {
-    const d = new Date(s.date);
-    return `${d.getDate()}.${d.getMonth()+1}`;
-  });
-  const viewsData = sortedStats.map(s => s.views);
-  const contactsData = sortedStats.map(s => s.contacts);
-  const positionData = sortedStats.map(s => s.position);
-
-  currentChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: labels.length ? labels : ['Нет данных'],
-      datasets: [
-        { label: 'Просмотры', data: viewsData.length ? viewsData : [0], borderColor: '#3498db', backgroundColor: 'rgba(52, 152, 219, 0.2)', tension: 0.3, yAxisID: 'y' },
-        { label: 'Контакты', data: contactsData.length ? contactsData : [0], borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.2)', tension: 0.3, yAxisID: 'y' },
-        { label: 'Позиция', data: positionData.length ? positionData : [0], borderColor: '#f1c40f', borderDash: [5, 5], tension: 0.3, yAxisID: 'y1' }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { labels: { color: '#e6e9ef', font: { size: 10 } } }
-      },
-      scales: {
-        x: { ticks: { color: '#8a93a6', font: { size: 10 } }, grid: { color: '#2a3140' } },
-        y: { type: 'linear', display: true, position: 'left', ticks: { color: '#8a93a6', font: { size: 10 } }, grid: { color: '#2a3140' }, title: { display: true, text: 'Просмотры/Контакты', color: '#8a93a6', font: { size: 10 } } },
-        y1: { type: 'linear', display: true, position: 'right', reverse: true, ticks: { color: '#f1c40f', font: { size: 10 } }, grid: { drawOnChartArea: false }, title: { display: true, text: 'Позиция (меньше = лучше)', color: '#f1c40f', font: { size: 10 } } }
-      }
-    }
-  });
+  setTimeout(() => ta.focus(), 50);
 }
 
 async function saveMarker() {
@@ -362,48 +425,16 @@ async function saveMarker() {
     const idx = markers.findIndex(m => m.id === editingMarkerId);
     if (idx >= 0) markers[idx] = { ...markers[idx], comment, color: markerColor, typeId };
   } else if (pendingCoords) {
-    const days = parseInt(document.getElementById('marker-days').value) || 30;
-    const expiryDate = Date.now() + (days * 24 * 60 * 60 * 1000);
-    const newMarker = { id: uid('m'), comment, color: markerColor, typeId, createdAt: Date.now(), expiryDate, stats: [] };
+    const newMarker = { id: uid('m'), comment, color: markerColor, typeId, createdAt: Date.now() };
     if (activeMap.type === 'osm') { newMarker.lat = pendingCoords.lat; newMarker.lng = pendingCoords.lng; } 
     else { newMarker.x = pendingCoords.x; newMarker.y = pendingCoords.y; }
     markers.push(newMarker);
-    editingMarkerId = newMarker.id; // Чтобы можно было сразу добавить статистику
   }
   
-  if (await saveMap(activeMap.id, { markers })) toast('Сохранено', 'success');
   document.getElementById('dialog-marker').close();
   editingMarkerId = null; pendingCoords = null;
-}
 
-async function saveStats() {
-  if (!editingMarkerId) return;
-  const views = parseInt(document.getElementById('stat-views').value) || 0;
-  const contacts = parseInt(document.getElementById('stat-contacts').value) || 0;
-  const position = parseInt(document.getElementById('stat-position').value) || 0;
-  
-  const todayStr = new Date().toISOString().split('T')[0];
-  const markers = [...(activeMap?.markers || [])];
-  const idx = markers.findIndex(m => m.id === editingMarkerId);
-  if (idx === -1) return;
-
-  const marker = { ...markers[idx] };
-  if (!marker.stats) marker.stats = [];
-
-  const existingStatIdx = marker.stats.findIndex(s => s.date === todayStr);
-  const newStat = { date: todayStr, views, contacts, position };
-
-  if (existingStatIdx >= 0) {
-    marker.stats[existingStatIdx] = newStat; // Обновляем сегодняшнюю запись
-  } else {
-    marker.stats.push(newStat); // Добавляем новую
-  }
-
-  markers[idx] = marker;
-  if (await saveMap(activeMap.id, { markers })) {
-    toast('Статистика обновлена', 'success');
-    renderChart(marker); // Перерисовываем график
-  }
+  if (await saveMap(activeMap.id, { markers })) toast('Сохранено', 'success');
 }
 
 async function deleteMarker(id) {
@@ -412,20 +443,30 @@ async function deleteMarker(id) {
   if (await saveMap(activeMap.id, { markers })) toast('Метка удалена', 'success');
 }
 
+/* ============================================================
+   Map Creation & Events
+   ============================================================ */
 async function handleUpload(e) {
   e.preventDefault();
   const name = document.getElementById('upload-name').value.trim();
   const mapType = document.querySelector('input[name="map-type"]:checked').value;
-  if (!name) return;
-  const mapId = uid('map'); const now = Date.now();
+  if (!name) { toast('Введите название', 'error'); return; }
+
+  const mapId = uid('map');
+  const now = Date.now();
   let mapDoc = { id: mapId, name, type: mapType, markers: [], markerTypes: [], version: 1, updatedAt: now };
 
   if (mapType === 'image') {
     const file = document.getElementById('upload-file').files[0];
     if (!file) { toast('Выберите изображение', 'error'); return; }
-    try { const { dataUrl, width, height } = await compressImage(file); mapDoc.image = dataUrl; mapDoc.imageWidth = width; mapDoc.imageHeight = height; } 
-    catch (err) { toast('Ошибка: ' + err.message, 'error'); return; }
-  } else { mapDoc.center = { lat: SPB_LAT, lng: SPB_LNG }; mapDoc.zoom = SPB_ZOOM; }
+    toast('Сжимаем изображение...');
+    try {
+      const { dataUrl, width, height } = await compressImage(file);
+      mapDoc.image = dataUrl; mapDoc.imageWidth = width; mapDoc.imageHeight = height;
+    } catch (err) { console.error(err); toast('Ошибка: ' + err.message, 'error'); return; }
+  } else {
+    mapDoc.center = { lat: SPB_LAT, lng: SPB_LNG }; mapDoc.zoom = SPB_ZOOM;
+  }
 
   isSaving = true; setSyncStatus('saving');
   try {
@@ -434,7 +475,9 @@ async function handleUpload(e) {
     await saveMain({ maps, activeMapId: mapId });
     activeMap = mapDoc; cacheMap(mapId, mapDoc); subscribeMap(mapId); renderMain(); renderMap();
     document.getElementById('upload-form').reset(); document.getElementById('dialog-upload').close();
-  } catch (err) { console.error(err); } finally { isSaving = false; }
+    toast('Карта создана', 'success');
+  } catch (err) { console.error(err); toast('Ошибка: ' + err.message, 'error'); } 
+  finally { isSaving = false; }
 }
 
 function compressImage(file) {
@@ -450,25 +493,29 @@ function compressImage(file) {
         let q = 0.82; let dataUrl = cv.toDataURL('image/jpeg', q);
         while (dataUrl.length > 700_000 && q > 0.35) { q -= 0.08; dataUrl = cv.toDataURL('image/jpeg', q); }
         resolve({ dataUrl, width: w, height: h });
-      }; img.onerror = () => reject(new Error('Ошибка')); img.src = reader.result;
-    }; reader.onerror = () => reject(new Error('Ошибка')); reader.readAsDataURL(file);
+      };
+      img.onerror = () => reject(new Error('Ошибка чтения'));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error('Ошибка файла')); reader.readAsDataURL(file);
   });
 }
 
 async function deleteActiveMap() {
   const id = mainData?.activeMapId;
-  if (!id || !confirm('Удалить карту?')) return;
+  if (!id || !confirm('Удалить карту со всеми метками?')) return;
   try {
     isSaving = true; await deleteDoc(doc(db, 'maps', id)); isSaving = false;
-    if (mapUnsub) { mapUnsub(); mapUnsub = null; } subscribedMapId = null; activeMap = null;
+    if (mapUnsub) { mapUnsub(); mapUnsub = null; }
+    subscribedMapId = null; activeMap = null;
     if (leafletMap) { leafletMap.remove(); leafletMap = null; }
     localStorage.removeItem(LS_MAP(id));
     const maps = (mainData.maps || []).filter(m => m.id !== id);
     const newActive = maps[0]?.id || null;
     await saveMain({ maps, activeMapId: newActive });
     if (newActive) subscribeMap(newActive);
-    renderMap(); renderMain();
-  } catch (e) { isSaving = false; }
+    renderMap(); renderMain(); toast('Карта удалена', 'success');
+  } catch (e) { isSaving = false; console.error(e); toast('Ошибка удаления', 'error'); }
 }
 
 function switchMap(id) {
@@ -479,6 +526,9 @@ function switchMap(id) {
   subscribeMap(id);
 }
 
+/* ============================================================
+   Events
+   ============================================================ */
 function bindEvents() {
   document.getElementById('map-image').addEventListener('click', (e) => {
     if (!activeMap || activeMap.type === 'osm') return;
@@ -487,41 +537,101 @@ function bindEvents() {
     if (x >= 0 && x <= 1 && y >= 0 && y <= 1) openMarkerDialog(null, { x, y });
   });
 
-  document.getElementById('btn-upload').addEventListener('click', () => { document.getElementById('upload-form').reset(); document.getElementById('dialog-upload').showModal(); });
-  document.querySelectorAll('input[name="map-type"]').forEach(radio => {
-    radio.addEventListener('change', e => { document.getElementById('file-field').style.display = e.target.value === 'image' ? 'flex' : 'none'; });
+  document.getElementById('btn-upload').addEventListener('click', () => {
+    document.getElementById('upload-form').reset();
+    document.getElementById('upload-file').required = true;
+    document.getElementById('file-field').style.display = 'flex';
+    document.getElementById('dialog-upload').showModal();
   });
-  document.getElementById('upload-form').addEventListener('submit', handleUpload);
+
+  document.querySelectorAll('input[name="map-type"]').forEach(radio => {
+    radio.addEventListener('change', e => {
+      const isImage = e.target.value === 'image';
+      document.getElementById('file-field').style.display = isImage ? 'flex' : 'none';
+      document.getElementById('upload-file').required = isImage;
+    });
+  });
+
   document.getElementById('upload-cancel').addEventListener('click', () => document.getElementById('dialog-upload').close());
+  document.getElementById('upload-form').addEventListener('submit', handleUpload);
   document.getElementById('map-select').addEventListener('change', e => switchMap(e.target.value));
   document.getElementById('btn-delete-map').addEventListener('click', deleteActiveMap);
 
-  // Вкладки и кнопки метки
-  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
-  document.getElementById('marker-form-main').addEventListener('submit', (e) => { e.preventDefault(); saveMarker(); });
-  document.getElementById('btn-save-stats').addEventListener('click', saveStats);
-  document.getElementById('marker-cancel').addEventListener('click', () => { document.getElementById('dialog-marker').close(); editingMarkerId = null; pendingCoords = null; });
-  document.getElementById('marker-delete').addEventListener('click', () => { const id = editingMarkerId; document.getElementById('dialog-marker').close(); editingMarkerId = null; if (id) deleteMarker(id); });
+  document.getElementById('marker-form').addEventListener('submit', e => { e.preventDefault(); saveMarker(); });
+  document.getElementById('marker-cancel').addEventListener('click', () => {
+    document.getElementById('dialog-marker').close(); editingMarkerId = null; pendingCoords = null;
+  });
+  document.getElementById('marker-delete').addEventListener('click', () => {
+    const id = editingMarkerId; document.getElementById('dialog-marker').close(); editingMarkerId = null;
+    if (id) deleteMarker(id);
+  });
 
   document.getElementById('btn-clear-markers').addEventListener('click', async () => {
-    if (!activeMap?.markers?.length || !confirm('Удалить все метки?')) return;
+    if (!activeMap?.markers?.length) return;
+    if (!confirm('Удалить все метки на этой карте?')) return;
     if (await saveMap(activeMap.id, { markers: [] })) toast('Метки очищены', 'success');
   });
 
-  // Меню и типы
   document.getElementById('btn-menu').addEventListener('click', () => document.getElementById('dialog-menu').showModal());
   document.getElementById('btn-close-menu').addEventListener('click', () => document.getElementById('dialog-menu').close());
-  document.getElementById('btn-manage-types').addEventListener('click', () => { document.getElementById('dialog-menu').close(); renderTypesList(); document.getElementById('dialog-types').showModal(); });
-  document.getElementById('btn-close-types').addEventListener('click', () => document.getElementById('dialog-types').close());
   
+  document.getElementById('btn-manage-types').addEventListener('click', () => {
+    document.getElementById('dialog-menu').close();
+    renderTypesList();
+    document.getElementById('dialog-types').showModal();
+  });
+  
+  document.getElementById('btn-close-types').addEventListener('click', () => document.getElementById('dialog-types').close());
+
   document.getElementById('btn-add-type').addEventListener('click', async () => {
-    const input = document.getElementById('new-type-name'); const name = input.value.trim(); if (!name) return;
-    const newType = { id: uid('t'), name }; const newTypes = [...(activeMap.markerTypes || []), newType];
-    if (await saveMap(activeMap.id, { markerTypes: newTypes })) { input.value = ''; visibleTypes.add(newType.id); renderTypesList(); renderMap(); }
+    const input = document.getElementById('new-type-name');
+    const name = input.value.trim();
+    if (!name) return;
+    
+    const newType = { id: uid('t'), name };
+    const newTypes = [...(activeMap.markerTypes || []), newType];
+    
+    if (await saveMap(activeMap.id, { markerTypes: newTypes })) {
+      input.value = '';
+      visibleTypes.add(newType.id); 
+      renderTypesList();
+      renderMap();
+      toast('Тип добавлен', 'success');
+    }
   });
 
-  document.getElementById('btn-export').addEventListener('click', () => { /* ... старый код экспорта ... */ });
-  // (Оставил старый код экспорта/импорта, если он нужен, но чтобы не загромождать - вот ссылка на логику)
+  document.getElementById('btn-export').addEventListener('click', () => {
+    const payload = { main: mainData, maps: {} };
+    for (const m of (mainData?.maps || [])) { const c = readCacheMap(m.id); if (c) payload.maps[m.id] = c; }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = url; a.download = `city-map-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click(); URL.revokeObjectURL(url); toast('Экспорт готов', 'success');
+    document.getElementById('dialog-menu').close();
+  });
+
+  document.getElementById('btn-import').addEventListener('click', () => document.getElementById('import-file').click());
+  document.getElementById('import-file').addEventListener('change', async e => {
+    const f = e.target.files[0];
+    if (f) {
+      try {
+        const data = JSON.parse(await f.text());
+        if (!data.main || !data.maps) throw new Error('Неверный формат файла');
+        if (!confirm('Импорт заменит текущие данные. Продолжить?')) return;
+        isSaving = true;
+        for (const [id, mapDoc] of Object.entries(data.maps)) { await setDoc(doc(db, 'maps', id), mapDoc); cacheMap(id, mapDoc); }
+        await setDoc(doc(db, 'data', 'main'), data.main); isSaving = false;
+        mainData = data.main; cacheMain(mainData); renderMain();
+        if (mainData.activeMapId) subscribeMap(mainData.activeMapId);
+        toast('Импорт завершён', 'success');
+      } catch (e) { isSaving = false; console.error(e); toast('Ошибка: ' + e.message, 'error'); }
+    }
+    e.target.value = ''; document.getElementById('dialog-menu').close();
+  });
+
+  window.addEventListener('online', () => { if (isReady) setSyncStatus('online'); });
+  window.addEventListener('offline', () => setSyncStatus('offline'));
 }
+
 bindEvents();
 boot();
