@@ -30,13 +30,23 @@ let subscribedMapId = null;
 let mainUnsub = null;
 let mapUnsub = null;
 let editingMarkerId = null;
-let pendingCoords = null;     // {x, y} при создании новой метки
+let pendingCoords = null;     // {x, y} или {lat, lng}
+let pendingMapType = 'image';
 let markerColor = '#e74c3c';
+
+// Leaflet
+let leafletMap = null;
+let leafletMarkers = [];
 
 const LS_MAIN = 'mapTool:main';
 const LS_MAP  = id => `mapTool:map:${id}`;
 const COLORS = ['#e74c3c','#3498db','#2ecc71','#f1c40f',
                 '#9b59b6','#e67e22','#1abc9c','#34495e'];
+
+// Координаты Санкт-Петербурга
+const SPB_LAT = 59.9343;
+const SPB_LNG = 30.3351;
+const SPB_ZOOM = 12;
 
 /* ============================================================
    Utils
@@ -132,13 +142,12 @@ function subscribeMain() {
     const data = snap.data();
 
     if (!data) {
-      // Документа ещё нет — даём шанс создать его первым действием
       if (!isReady) { isReady = true; setSyncStatus('online'); }
       return;
     }
     if (mainData && (data.version || 0) <= (mainData.version || 0)) {
       if (!isReady) { isReady = true; setSyncStatus('online'); }
-      return;   // чужие/старые данные игнорируем
+      return;
     }
 
     mainData = data;
@@ -237,7 +246,7 @@ function renderMain() {
   const sel = document.getElementById('map-select');
   const maps = mainData?.maps || [];
   sel.innerHTML = maps.length
-    ? maps.map(m => `<option value="${esc(m.id)}"${m.id === mainData.activeMapId ? ' selected' : ''}>${esc(m.name)}</option>`).join('')
+    ? maps.map(m => `<option value="${esc(m.id)}"${m.id === mainData.activeMapId ? ' selected' : ''}>${esc(m.name)}${m.type === 'osm' ? ' 🌐' : ''}</option>`).join('')
     : '<option value="">— нет карт —</option>';
 
   document.getElementById('btn-delete-map').disabled = !mainData?.activeMapId;
@@ -246,27 +255,81 @@ function renderMain() {
 function renderMap() {
   const empty = document.getElementById('empty-state');
   const vp = document.getElementById('map-viewport');
-  const img = document.getElementById('map-image');
+  const leafletDiv = document.getElementById('leaflet-map');
 
-  if (!activeMap || !activeMap.image) {
+  if (!activeMap) {
     empty.hidden = false;
     vp.hidden = true;
+    leafletDiv.hidden = true;
     renderMarkers();
     return;
   }
-  empty.hidden = true;
-  vp.hidden = false;
-  if (img.src !== activeMap.image) img.src = activeMap.image;
-  renderMarkers();
+
+  if (activeMap.type === 'osm') {
+    empty.hidden = true;
+    vp.hidden = true;
+    leafletDiv.hidden = false;
+    initLeafletMap();
+    renderLeafletMarkers();
+    renderMarkerList();
+  } else {
+    empty.hidden = true;
+    leafletDiv.hidden = true;
+    vp.hidden = false;
+    const img = document.getElementById('map-image');
+    if (img.src !== activeMap.image) img.src = activeMap.image;
+    renderMarkers();
+  }
 }
 
+/* ============================================================
+   Leaflet
+   ============================================================ */
+function initLeafletMap() {
+  if (leafletMap) {
+    leafletMap.remove();
+    leafletMap = null;
+  }
+  const div = document.getElementById('leaflet-map');
+  div.innerHTML = '';
+  leafletMap = L.map(div).setView([SPB_LAT, SPB_LNG], SPB_ZOOM);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(leafletMap);
+
+  leafletMap.on('click', e => {
+    if (!activeMap) return;
+    openMarkerDialog(null, { lat: e.latlng.lat, lng: e.latlng.lng });
+  });
+}
+
+function renderLeafletMarkers() {
+  if (!leafletMap) return;
+  leafletMarkers.forEach(m => m.remove());
+  leafletMarkers = [];
+  const markers = activeMap?.markers || [];
+  markers.forEach((m, i) => {
+    const icon = L.divIcon({
+      className: 'leaflet-marker-custom',
+      html: `<div style="background:${m.color || '#e74c3c'};width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.5)">${i+1}</div>`,
+      iconSize: [26, 26],
+      iconAnchor: [13, 13]
+    });
+    const lm = L.marker([m.lat, m.lng], { icon }).addTo(leafletMap);
+    lm.on('click', () => openMarkerDialog(m.id));
+    lm.bindTooltip(m.comment || 'Метка', { direction: 'top' });
+    leafletMarkers.push(lm);
+  });
+}
+
+/* ============================================================
+   Render markers for image maps (как раньше)
+   ============================================================ */
 function renderMarkers() {
   const layer = document.getElementById('markers-layer');
-  const list = document.getElementById('markers-list');
-  const countEl = document.getElementById('marker-count');
   const markers = activeMap?.markers || [];
-
-  if (countEl) countEl.textContent = markers.length;
 
   if (layer) {
     layer.innerHTML = '';
@@ -283,6 +346,14 @@ function renderMarkers() {
       layer.appendChild(el);
     });
   }
+  renderMarkerList();
+}
+
+function renderMarkerList() {
+  const list = document.getElementById('markers-list');
+  const countEl = document.getElementById('marker-count');
+  const markers = activeMap?.markers || [];
+  if (countEl) countEl.textContent = markers.length;
 
   if (!list) return;
   if (!markers.length) {
@@ -309,23 +380,20 @@ function renderMarkers() {
     item.querySelector('[data-act="del"]').addEventListener('click', e => {
       e.stopPropagation(); deleteMarker(id);
     });
-    item.addEventListener('click', () => focusMarker(id));
+    item.addEventListener('click', () => {
+      const marker = activeMap?.markers.find(m => m.id === id);
+      if (marker && activeMap.type === 'osm' && leafletMap) {
+        leafletMap.setView([marker.lat, marker.lng], 15);
+      }
+    });
   });
 }
 
-function focusMarker(id) {
-  const el = document.querySelector(`.marker[data-id="${id}"]`);
-  if (!el) return;
-  el.classList.add('pulse');
-  setTimeout(() => el.classList.remove('pulse'), 1300);
-  el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-}
-
 /* ============================================================
-   Map click → new marker
+   Map click → new marker (для изображения)
    ============================================================ */
 function onMapClick(e) {
-  if (!activeMap) return;
+  if (!activeMap || activeMap.type === 'osm') return;
   const img = document.getElementById('map-image');
   const r = img.getBoundingClientRect();
   const x = (e.clientX - r.left) / r.width;
@@ -385,12 +453,20 @@ async function saveMarker() {
     const idx = markers.findIndex(m => m.id === editingMarkerId);
     if (idx >= 0) markers[idx] = { ...markers[idx], comment, color: markerColor };
   } else if (pendingCoords) {
-    markers.push({
+    const newMarker = {
       id: uid('m'),
-      x: pendingCoords.x, y: pendingCoords.y,
-      comment, color: markerColor,
+      comment,
+      color: markerColor,
       createdAt: Date.now()
-    });
+    };
+    if (activeMap.type === 'osm') {
+      newMarker.lat = pendingCoords.lat;
+      newMarker.lng = pendingCoords.lng;
+    } else {
+      newMarker.x = pendingCoords.x;
+      newMarker.y = pendingCoords.y;
+    }
+    markers.push(newMarker);
   }
   document.getElementById('dialog-marker').close();
   editingMarkerId = null;
@@ -408,47 +484,87 @@ async function deleteMarker(id) {
 }
 
 /* ============================================================
-   Upload new map
+   Create map (image or OSM)
    ============================================================ */
 async function handleUpload(e) {
   e.preventDefault();
   const name = document.getElementById('upload-name').value.trim();
-  const file = document.getElementById('upload-file').files[0];
-  if (!name || !file) { toast('Заполните все поля', 'error'); return; }
+  const mapType = document.querySelector('input[name="map-type"]:checked').value;
 
-  toast('Сжимаем изображение...');
-  try {
-    const { dataUrl, width, height } = await compressImage(file);
+  if (!name) { toast('Введите название', 'error'); return; }
+
+  if (mapType === 'image') {
+    const file = document.getElementById('upload-file').files[0];
+    if (!file) { toast('Выберите изображение', 'error'); return; }
+    toast('Сжимаем изображение...');
+    try {
+      const { dataUrl, width, height } = await compressImage(file);
+      const mapId = uid('map');
+      const now = Date.now();
+      const mapDoc = {
+        id: mapId, name, type: 'image', image: dataUrl,
+        imageWidth: width, imageHeight: height,
+        markers: [], version: 1, updatedAt: now
+      };
+
+      isSaving = true;
+      setSyncStatus('saving');
+      await setDoc(doc(db, 'maps', mapId), mapDoc);
+      isSaving = false;
+
+      const maps = [...(mainData?.maps || []),
+        { id: mapId, name, type: 'image', createdAt: now, updatedAt: now, markerCount: 0 }];
+      await saveMain({ maps, activeMapId: mapId });
+
+      activeMap = mapDoc;
+      cacheMap(mapId, mapDoc);
+      subscribeMap(mapId);
+      renderMain();
+      renderMap();
+
+      document.getElementById('upload-form').reset();
+      document.getElementById('dialog-upload').close();
+      toast('Карта загружена', 'success');
+    } catch (err) {
+      isSaving = false;
+      console.error(err);
+      toast('Ошибка: ' + err.message, 'error');
+    }
+  } else {
+    // OSM
     const mapId = uid('map');
     const now = Date.now();
     const mapDoc = {
-      id: mapId, name, image: dataUrl,
-      imageWidth: width, imageHeight: height,
+      id: mapId, name, type: 'osm',
+      center: { lat: SPB_LAT, lng: SPB_LNG },
+      zoom: SPB_ZOOM,
       markers: [], version: 1, updatedAt: now
     };
 
     isSaving = true;
     setSyncStatus('saving');
-    await setDoc(doc(db, 'maps', mapId), mapDoc);
-    isSaving = false;
+    try {
+      await setDoc(doc(db, 'maps', mapId), mapDoc);
+      isSaving = false;
 
-    const maps = [...(mainData?.maps || []),
-      { id: mapId, name, createdAt: now, updatedAt: now, markerCount: 0 }];
-    await saveMain({ maps, activeMapId: mapId });
+      const maps = [...(mainData?.maps || []),
+        { id: mapId, name, type: 'osm', createdAt: now, updatedAt: now, markerCount: 0 }];
+      await saveMain({ maps, activeMapId: mapId });
 
-    activeMap = mapDoc;
-    cacheMap(mapId, mapDoc);
-    subscribeMap(mapId);
-    renderMain();
-    renderMap();
+      activeMap = mapDoc;
+      cacheMap(mapId, mapDoc);
+      subscribeMap(mapId);
+      renderMain();
+      renderMap();
 
-    document.getElementById('upload-form').reset();
-    document.getElementById('dialog-upload').close();
-    toast('Карта загружена', 'success');
-  } catch (err) {
-    isSaving = false;
-    console.error(err);
-    toast('Ошибка: ' + err.message, 'error');
+      document.getElementById('upload-form').reset();
+      document.getElementById('dialog-upload').close();
+      toast('Интерактивная карта создана', 'success');
+    } catch (err) {
+      isSaving = false;
+      console.error(err);
+      toast('Ошибка: ' + err.message, 'error');
+    }
   }
 }
 
@@ -497,6 +613,7 @@ async function deleteActiveMap() {
     if (mapUnsub) { mapUnsub(); mapUnsub = null; }
     subscribedMapId = null;
     activeMap = null;
+    if (leafletMap) { leafletMap.remove(); leafletMap = null; }
     localStorage.removeItem(LS_MAP(id));
 
     const maps = (mainData.maps || []).filter(m => m.id !== id);
@@ -571,8 +688,22 @@ async function importJSON(file) {
 function bindEvents() {
   document.getElementById('map-image').addEventListener('click', onMapClick);
 
-  document.getElementById('btn-upload').addEventListener('click', () =>
-    document.getElementById('dialog-upload').showModal());
+  document.getElementById('btn-upload').addEventListener('click', () => {
+    document.getElementById('upload-form').reset();
+    document.getElementById('upload-file').required = true;
+    document.getElementById('file-field').style.display = 'flex';
+    document.getElementById('dialog-upload').showModal();
+  });
+
+  // Переключение типа карты
+  document.querySelectorAll('input[name="map-type"]').forEach(radio => {
+    radio.addEventListener('change', e => {
+      const isImage = e.target.value === 'image';
+      document.getElementById('file-field').style.display = isImage ? 'flex' : 'none';
+      document.getElementById('upload-file').required = isImage;
+    });
+  });
+
   document.getElementById('upload-cancel').addEventListener('click', () =>
     document.getElementById('dialog-upload').close());
   document.getElementById('upload-form').addEventListener('submit', handleUpload);
