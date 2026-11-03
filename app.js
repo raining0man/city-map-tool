@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js";
-import { getFirestore, doc, onSnapshot, setDoc, deleteDoc }
+import { getFirestore, doc, onSnapshot, setDoc, deleteDoc, getDoc }
   from "https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -80,14 +80,20 @@ async function boot() {
   setTimeout(() => { if (!isReady) { isReady = true; setSyncStatus('offline'); } }, 15000);
 }
 
+// Убрали блокировки isSaving и строгую проверку версий. 
+// Теперь мы всегда принимаем данные от Firebase, если они пришли.
 function subscribeMain() {
   if (mainUnsub) mainUnsub();
   mainUnsub = onSnapshot(doc(db, 'data', 'main'), snap => {
-    if (isSaving) return;
     const data = snap.data();
     if (!data) { if (!isReady) { isReady = true; setSyncStatus('online'); } return; }
-    if (mainData && (data.version || 0) <= (mainData.version || 0)) { if (!isReady) { isReady = true; setSyncStatus('online'); } return; }
-    mainData = data; cacheMain(data); isReady = true; setSyncStatus('online'); renderMain();
+    
+    mainData = data; 
+    cacheMain(data); 
+    isReady = true; 
+    setSyncStatus('online'); 
+    renderMain();
+    
     if (data.activeMapId !== subscribedMapId) {
       if (data.activeMapId) subscribeMap(data.activeMapId);
       else { activeMap = null; subscribedMapId = null; renderMap(); }
@@ -99,10 +105,9 @@ function subscribeMap(mapId) {
   if (mapUnsub) { mapUnsub(); mapUnsub = null; }
   subscribedMapId = mapId;
   mapUnsub = onSnapshot(doc(db, 'maps', mapId), snap => {
-    if (isSaving) return;
     const data = snap.data();
     if (!data) return;
-    if (activeMap && activeMap.id === mapId && (data.version || 0) <= (activeMap.version || 0)) return;
+    
     activeMap = data; 
     cacheMap(mapId, data); 
     renderMap();
@@ -113,24 +118,49 @@ async function saveMain(patch) {
   if (!isReady) { toast('Синхронизация ещё не готова', 'error'); return false; }
   const base = mainData || { version: 0, maps: [], activeMapId: null };
   const next = { ...base, ...patch, version: (base.version || 0) + 1, updatedAt: Date.now() };
-  isSaving = true; setSyncStatus('saving');
+  
+  setSyncStatus('saving');
   try {
     await setDoc(doc(db, 'data', 'main'), next);
-    mainData = next; cacheMain(next); setSyncStatus('online'); return true;
-  } catch (e) { console.error(e); setSyncStatus('error'); toast('Ошибка сохранения', 'error'); return false; } 
-  finally { isSaving = false; }
+    mainData = next; 
+    cacheMain(next); 
+    setSyncStatus('online'); 
+    return true;
+  } catch (e) { 
+    console.error(e); 
+    setSyncStatus('error'); 
+    toast('Ошибка сохранения', 'error'); 
+    return false; 
+  }
 }
 
 async function saveMap(mapId, patch) {
   if (!isReady) { toast('Синхронизация ещё не готова', 'error'); return false; }
-  const base = (activeMap && activeMap.id === mapId) ? activeMap : (readCacheMap(mapId) || { id: mapId, version: 0, markers: [], markerTypes: [] });
+  
+  // Читаем самую свежую версию карты из базы перед сохранением, чтобы не затереть чужие метки
+  let base = activeMap;
+  try {
+    const snap = await getDoc(doc(db, 'maps', mapId));
+    if (snap.exists()) base = snap.data();
+  } catch(e) {}
+
+  if (!base) base = { id: mapId, version: 0, markers: [], markerTypes: [] };
+  
   const next = { ...base, ...patch, id: mapId, version: (base.version || 0) + 1, updatedAt: Date.now() };
-  isSaving = true; setSyncStatus('saving');
+  
+  setSyncStatus('saving');
   try {
     await setDoc(doc(db, 'maps', mapId), next);
-    activeMap = next; cacheMap(mapId, next); setSyncStatus('online'); return true;
-  } catch (e) { console.error(e); setSyncStatus('error'); toast('Ошибка сохранения карты', 'error'); return false; } 
-  finally { isSaving = false; }
+    activeMap = next; 
+    cacheMap(mapId, next); 
+    setSyncStatus('online'); 
+    return true;
+  } catch (e) { 
+    console.error(e); 
+    setSyncStatus('error'); 
+    toast('Ошибка сохранения карты', 'error'); 
+    return false; 
+  }
 }
 
 function renderMain() {
